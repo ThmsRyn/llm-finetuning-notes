@@ -85,7 +85,8 @@ pip install -r requirements.txt
 # 2. Préparer le dataset
 python scripts/prepare_dataset.py \
   --input data/raw/mes_exemples.jsonl \
-  --output data/processed/train.json
+  --output data/processed/train.json \
+  --eval-output data/processed/eval.json
 
 # 3. Lancer l'entraînement
 python scripts/train_lora.py \

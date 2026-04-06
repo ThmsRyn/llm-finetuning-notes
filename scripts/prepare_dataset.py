@@ -26,6 +26,7 @@ Pour mapper d'autres noms de champs, utiliser les options --*-field.
 
 import argparse
 import json
+import random
 import sys
 from pathlib import Path
 
@@ -77,6 +78,23 @@ def parse_args() -> argparse.Namespace:
         "--no-dedup",
         action="store_true",
         help="Désactiver la déduplication sur le champ instruction.",
+    )
+    parser.add_argument(
+        "--eval-output",
+        type=Path,
+        help="Chemin optionnel pour exporter un split d'évaluation.",
+    )
+    parser.add_argument(
+        "--eval-size",
+        type=float,
+        default=0.1,
+        help="Part du dataset réservée à l'évaluation si --eval-output est utilisé (défaut: 0.1).",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Seed utilisée pour le split train/eval (défaut: 42).",
     )
     return parser.parse_args()
 
@@ -198,6 +216,37 @@ def filter_by_length(
     return filtered, removed
 
 
+def split_records(
+    records: list[dict],
+    eval_size: float,
+    seed: int,
+) -> tuple[list[dict], list[dict]]:
+    """
+    Sépare le dataset en deux sous-ensembles reproductibles.
+    Retourne (train_records, eval_records).
+    """
+    if not 0 < eval_size < 1:
+        raise ValueError("--eval-size doit être strictement compris entre 0 et 1.")
+
+    if len(records) < 2:
+        raise ValueError(
+            "Au moins 2 enregistrements valides sont nécessaires pour créer un split train/eval."
+        )
+
+    shuffled = records[:]
+    rng = random.Random(seed)
+    rng.shuffle(shuffled)
+
+    eval_count = max(1, int(len(shuffled) * eval_size))
+    eval_records = shuffled[:eval_count]
+    train_records = shuffled[eval_count:]
+
+    if not train_records:
+        raise ValueError("Le split demandé ne laisse aucun exemple dans l'ensemble train.")
+
+    return train_records, eval_records
+
+
 def main() -> None:
     args = parse_args()
 
@@ -258,14 +307,32 @@ def main() -> None:
         )
         sys.exit(1)
 
+    final_records = converted
+    eval_records: list[dict] = []
+
+    if args.eval_output is not None:
+        args.eval_output.parent.mkdir(parents=True, exist_ok=True)
+        final_records, eval_records = split_records(
+            converted,
+            eval_size=args.eval_size,
+            seed=args.seed,
+        )
+        with open(args.eval_output, "w", encoding="utf-8") as f:
+            json.dump(eval_records, f, ensure_ascii=False, indent=2)
+        print(
+            f"Split train/eval créé : train={len(final_records)} | eval={len(eval_records)} "
+            f"(seed={args.seed})"
+        )
+        print(f"Jeu d'évaluation écrit dans : {args.eval_output}")
+
     # Sauvegarde
     with open(args.output, "w", encoding="utf-8") as f:
-        json.dump(converted, f, ensure_ascii=False, indent=2)
+        json.dump(final_records, f, ensure_ascii=False, indent=2)
 
-    print(f"\nDataset final : {len(converted)} exemples -> {args.output}")
+    print(f"\nDataset final : {len(final_records)} exemples -> {args.output}")
 
     # Distribution des longueurs (informatif)
-    lengths = [approximate_token_count(r["output"]) for r in converted]
+    lengths = [approximate_token_count(r["output"]) for r in final_records]
     avg_length = sum(lengths) / len(lengths)
     min_length = min(lengths)
     max_length = max(lengths)
